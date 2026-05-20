@@ -72,6 +72,12 @@ class DaemonClient:
             "tools": await self._get("/tools"),
         }
 
+    async def jobs(self) -> list[dict[str, Any]]:
+        return await self._get("/jobs")
+
+    async def job(self, job_id: int) -> dict[str, Any]:
+        return await self._get(f"/jobs/{job_id}")
+
     async def create_job(self, prompt: str) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=30, transport=self.transport) as client:
             response = await client.post(
@@ -82,8 +88,23 @@ class DaemonClient:
             response.raise_for_status()
             return response.json()
 
+    async def cancel_job(self, job_id: int) -> dict[str, Any]:
+        return await self._post(f"/jobs/{job_id}/cancel")
+
+    async def retry_job(self, job_id: int) -> dict[str, Any]:
+        return await self._post(f"/jobs/{job_id}/retry")
+
+    async def sessions(self) -> list[dict[str, Any]]:
+        return await self._get("/sessions")
+
     async def session(self, session_id: int) -> dict[str, Any]:
         return await self._get(f"/sessions/{session_id}")
+
+    async def session_trace(self, session_id: int) -> dict[str, Any]:
+        return await self._get(f"/sessions/{session_id}/trace")
+
+    async def approvals(self, status: str = "pending") -> list[dict[str, Any]]:
+        return await self._get(f"/approvals?status={status}")
 
     async def approve(self, approval_id: int) -> dict[str, Any]:
         return await self._post(f"/approvals/{approval_id}/approve")

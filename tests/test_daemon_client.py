@@ -52,3 +52,65 @@ async def test_daemon_client_fetches_session() -> None:
 
     assert session == {"id": 3, "messages": []}
     assert requests[0].url == "http://daemon.test/sessions/3"
+
+
+@pytest.mark.asyncio
+async def test_daemon_client_fetches_sessions_trace_and_approvals() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/sessions":
+            return httpx.Response(200, json=[])
+        if request.url.path == "/sessions/3/trace":
+            return httpx.Response(200, json={"id": 3, "messages": [], "tool_calls": [], "approvals": []})
+        if request.url.path == "/approvals":
+            return httpx.Response(200, json=[])
+        return httpx.Response(404)
+
+    client = DaemonClient(
+        DaemonClientConfig(base_url="http://daemon.test", token="token"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert await client.sessions() == []
+    assert await client.session_trace(3) == {"id": 3, "messages": [], "tool_calls": [], "approvals": []}
+    assert await client.approvals(status="all") == []
+    assert [str(request.url) for request in requests] == [
+        "http://daemon.test/sessions",
+        "http://daemon.test/sessions/3/trace",
+        "http://daemon.test/approvals?status=all",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_daemon_client_manages_jobs() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path == "/jobs" and request.method == "GET":
+            return httpx.Response(200, json=[])
+        if request.url.path == "/jobs/3" and request.method == "GET":
+            return httpx.Response(200, json={"id": 3, "status": "failed"})
+        if request.url.path == "/jobs/3/cancel":
+            return httpx.Response(200, json={"id": 3, "status": "canceled"})
+        if request.url.path == "/jobs/3/retry":
+            return httpx.Response(200, json={"id": 4, "status": "queued"})
+        return httpx.Response(404)
+
+    client = DaemonClient(
+        DaemonClientConfig(base_url="http://daemon.test", token="token"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert await client.jobs() == []
+    assert await client.job(3) == {"id": 3, "status": "failed"}
+    assert await client.cancel_job(3) == {"id": 3, "status": "canceled"}
+    assert await client.retry_job(3) == {"id": 4, "status": "queued"}
+    assert [str(request.url) for request in requests] == [
+        "http://daemon.test/jobs",
+        "http://daemon.test/jobs/3",
+        "http://daemon.test/jobs/3/cancel",
+        "http://daemon.test/jobs/3/retry",
+    ]

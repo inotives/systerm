@@ -162,3 +162,29 @@ class ToolRunner:
             return ToolResult(status="error", content=content, tool_call_id=tool_call.id)
         await self.store.add_tool_result(tool_call.id, "complete", output, metadata_json=json.dumps({"returncode": 0}))
         return ToolResult(status="complete", content=output, tool_call_id=tool_call.id)
+
+    async def run_approved_shell(self, command: str, tool_call_id: int) -> ToolResult:
+        process = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        output = stdout.decode(errors="replace")
+        error = stderr.decode(errors="replace")
+        if process.returncode != 0:
+            content = error or f"command exited {process.returncode}"
+            await self.store.add_tool_result(
+                tool_call_id,
+                "error",
+                content,
+                metadata_json=json.dumps({"returncode": process.returncode, "approved": True}),
+            )
+            return ToolResult(status="error", content=content, tool_call_id=tool_call_id)
+        await self.store.add_tool_result(
+            tool_call_id,
+            "complete",
+            output,
+            metadata_json=json.dumps({"returncode": 0, "approved": True}),
+        )
+        return ToolResult(status="complete", content=output, tool_call_id=tool_call_id)

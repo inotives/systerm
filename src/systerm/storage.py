@@ -240,6 +240,64 @@ class SessionStore:
             metadata_json=metadata_json,
         )
 
+    async def mark_job_running(self, job_id: int) -> JobRecord:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "update jobs set status = ? where id = ? and status = ?",
+                ("running", job_id, "queued"),
+            )
+            await db.commit()
+            cursor = await db.execute(
+                """
+                select id, prompt, status, session_id, result_content, error, created_at, completed_at, metadata_json
+                from jobs
+                where id = ?
+                """,
+                (job_id,),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise ValueError(f"job {job_id} does not exist")
+        return _job_from_row(row)
+
+    async def cancel_job(self, job_id: int) -> JobRecord:
+        completed_at = _now()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                update jobs
+                set status = ?, result_content = ?, completed_at = ?
+                where id = ? and status in ('queued', 'running', 'approval-required')
+                """,
+                ("canceled", "job canceled by operator", completed_at, job_id),
+            )
+            await db.commit()
+            if cursor.rowcount == 0:
+                exists = await db.execute(
+                    """
+                    select id, prompt, status, session_id, result_content, error, created_at, completed_at, metadata_json
+                    from jobs
+                    where id = ?
+                    """,
+                    (job_id,),
+                )
+                row = await exists.fetchone()
+                if row is None:
+                    raise ValueError(f"job {job_id} does not exist")
+                raise ValueError(f"job {job_id} cannot be canceled from {row[2]}")
+            cursor = await db.execute(
+                """
+                select id, prompt, status, session_id, result_content, error, created_at, completed_at, metadata_json
+                from jobs
+                where id = ?
+                """,
+                (job_id,),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise ValueError(f"job {job_id} does not exist")
+        return _job_from_row(row)
+
     async def complete_job(
         self,
         job_id: int,
@@ -483,6 +541,34 @@ class SessionStore:
             )
             rows = await cursor.fetchall()
         return [_tool_result_from_row(row) for row in rows]
+
+    async def get_tool_call_by_approval(self, approval_id: int) -> ToolCallRecord | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                select id, session_id, tool_name, arguments_json, risk, approval_id, created_at, metadata_json
+                from tool_calls
+                where approval_id = ?
+                """,
+                (approval_id,),
+            )
+            row = await cursor.fetchone()
+        return _tool_call_from_row(row) if row is not None else None
+
+    async def get_latest_job_for_session(self, session_id: int) -> JobRecord | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                select id, prompt, status, session_id, result_content, error, created_at, completed_at, metadata_json
+                from jobs
+                where session_id = ?
+                order by id desc
+                limit 1
+                """,
+                (session_id,),
+            )
+            row = await cursor.fetchone()
+        return _job_from_row(row) if row is not None else None
 
     async def list_session_approvals(self, session_id: int) -> list[ApprovalRecord]:
         async with aiosqlite.connect(self.db_path) as db:

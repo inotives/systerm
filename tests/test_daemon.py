@@ -5,7 +5,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from systerm.daemon import create_app, load_or_create_token, run_job
+from systerm.daemon import create_app, load_or_create_token, resume_approved_tool, run_job
 from systerm.storage import SessionStore, default_db_path
 
 
@@ -79,6 +79,35 @@ async def test_daemon_approves_pending_approval(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_resume_approved_shell_tool_completes_paused_job(tmp_path: Path) -> None:
+    store = SessionStore(default_db_path(tmp_path))
+    await store.init()
+    session = await store.create_session()
+    job = await store.create_job("run command")
+    await store.complete_job(job.id, "approval-required", session.id, result_content="approval required")
+    approval = await store.create_approval("shell", '{"command": "printf resumed"}', "medium", "needs approval")
+    tool_call = await store.create_tool_call(
+        "shell",
+        '{"command": "printf resumed"}',
+        "medium",
+        session_id=session.id,
+        approval_id=approval.id,
+    )
+
+    await store.resolve_approval(approval.id, "approved")
+    await resume_approved_tool(store, set(), approval.id)
+
+    completed = await store.get_job(job.id)
+    results = await store.list_tool_results(tool_call.id)
+    messages = await store.list_messages(session.id)
+    assert completed is not None
+    assert completed.status == "tool-use"
+    assert completed.result_content == "resumed"
+    assert results[0].status == "complete"
+    assert messages[-1] == {"role": "tool", "content": "resumed"}
+
+
+@pytest.mark.asyncio
 async def test_daemon_lists_jobs(tmp_path: Path) -> None:
     store = SessionStore(default_db_path(tmp_path))
     await store.init()
@@ -113,6 +142,45 @@ async def test_daemon_gets_job_detail(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert response.json()["id"] == job.id
+
+
+@pytest.mark.asyncio
+async def test_daemon_cancels_job(tmp_path: Path) -> None:
+    store = SessionStore(default_db_path(tmp_path))
+    await store.init()
+    job = await store.create_job("hello")
+    app = create_app(tmp_path, token="test-token")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        headers={"Authorization": "Bearer test-token"},
+    ) as client:
+        response = await client.post(f"/jobs/{job.id}/cancel")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "canceled"
+
+
+@pytest.mark.asyncio
+async def test_daemon_retries_job(tmp_path: Path) -> None:
+    store = SessionStore(default_db_path(tmp_path))
+    await store.init()
+    job = await store.create_job("hello")
+    await store.complete_job(job.id, "failed", None, error="boom")
+    app = create_app(tmp_path, token="test-token")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        headers={"Authorization": "Bearer test-token"},
+    ) as client:
+        response = await client.post(f"/jobs/{job.id}/retry")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "queued"
+    assert response.json()["prompt"] == "hello"
+    assert response.json()["metadata_json"] == f'{{"retry_of": {job.id}}}'
 
 
 @pytest.mark.asyncio

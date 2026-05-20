@@ -100,6 +100,32 @@ async def test_session_store_persists_jobs(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_session_store_marks_and_cancels_jobs(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "systerm.db")
+    await store.init()
+    job = await store.create_job("hello")
+
+    running = await store.mark_job_running(job.id)
+    canceled = await store.cancel_job(job.id)
+
+    assert running.status == "running"
+    assert canceled.status == "canceled"
+    assert canceled.result_content == "job canceled by operator"
+    assert canceled.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_session_store_rejects_canceling_finished_job(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path / "systerm.db")
+    await store.init()
+    job = await store.create_job("hello")
+    await store.complete_job(job.id, "complete", None, result_content="done")
+
+    with pytest.raises(ValueError):
+        await store.cancel_job(job.id)
+
+
+@pytest.mark.asyncio
 async def test_session_store_persists_events(tmp_path: Path) -> None:
     store = SessionStore(tmp_path / "systerm.db")
     await store.init()
