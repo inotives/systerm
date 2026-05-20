@@ -16,8 +16,9 @@ References:
 ## Key Interfaces
 
 - CLI package exposes one command, `systerm`:
+  - `systerm`: launches the TUI operator console by default once the TUI exists.
   - `systerm daemon`: starts the local daemon.
-  - `systerm tui`: opens the operator console and attaches to the daemon.
+  - `systerm tui`: optional explicit alias for opening the operator console and attaching to the daemon.
   - `systerm chat "prompt"`: runs a one-off local session in Phase 1, then submits a daemon job once the daemon exists.
   - `systerm approvals list/approve/reject`: manages pending tool approvals from the CLI.
   - `systerm schedule add/list/remove`: manages simple scheduled agent prompts.
@@ -35,8 +36,9 @@ References:
   - Uses token authentication for local HTTP clients.
   - Stores generated local token at `~/.config/systerm/token` with `0600` permissions.
   - Allows token override through an environment variable for CI/dev.
-  - HTTP endpoints for sessions, jobs, approvals, schedules, providers.
+  - HTTP endpoints for sessions, jobs, approvals, schedules, providers, models, tools, skills, agents, connectors, and config/profile reload.
   - WebSocket event stream for TUI live updates.
+  - Owns all SQLite writes once the daemon exists; CLI/TUI/connectors talk to the daemon instead of writing SQLite directly.
 - SQLite stores:
   - sessions, messages, model events, tool calls, tool results, approvals, jobs, schedules, connector events, and audit logs.
 - Agent profile uses `AGENTS.md`:
@@ -127,14 +129,25 @@ References:
 - Add daemon process:
   - `systerm daemon` starts a localhost-only service.
   - Local HTTP clients authenticate with a generated/shared token.
-  - HTTP endpoints for sessions, jobs, approvals, providers, and profile reload.
+  - HTTP endpoints for sessions, jobs, approvals, providers, models, tools, skills, agents, schedules, connectors, and profile/config reload.
   - WebSocket event stream for live TUI updates.
   - Async job queue for submitted prompts.
+  - Daemon owns runtime state and execution: agent loops, SQLite writes, jobs, approvals, schedules, Discord connector, future connectors, and event publication.
+  - Discord and future connectors run inside the daemon, independent of whether the TUI is open.
+  - Discord-created prompts create daemon jobs and sessions with source metadata such as connector name, channel ID, and user ID.
 - Add TUI:
-  - `systerm tui` opens an operator console attached to the daemon.
-  - Panels for sessions, active jobs, pending approvals, live event log, current model, and tool traces.
+  - `systerm` opens the TUI operator console by default.
+  - `systerm tui` remains an explicit alias if kept for discoverability.
+  - TUI is an operator client, not the runtime owner.
+  - TUI checks daemon health, authenticates with the local daemon token, loads initial state through HTTP, then follows live changes through WebSocket events.
+  - TUI should not read or write SQLite directly.
+  - Initial TUI mode may require the daemon to already be running; auto-starting the daemon can be added later after process lifecycle is clear.
+  - Main operational panels: sessions, active/queued/completed jobs, pending approvals, live event log, current model, and tool/session traces.
+  - Configuration panels: models, providers, tools, skills, agents, and loaded profile/config diagnostics.
+  - Automation panels: schedules and connectors, including Discord connection status and controls routed through daemon commands.
   - Local prompt input and model selector.
   - Approve/reject medium/high-risk tool calls from the TUI.
+  - First TUI version should be mostly read/display plus prompt submission and approve/reject; editing models/providers/tools/skills/agents/schedules can be added incrementally.
 
 ### Phase 4: Schedules and Discord Connector
 
@@ -190,7 +203,9 @@ References:
   - Daemon rejects HTTP/WebSocket clients without a valid local token.
   - Local daemon token is generated with restrictive file permissions and env override works.
   - Daemon API creates jobs and emits WebSocket events.
-  - TUI can connect to daemon, display sessions/jobs, and approve a pending tool call.
+  - TUI can connect to daemon through `systerm`, display sessions/jobs/approvals/traces, and approve/reject a pending tool call.
+  - TUI displays models, providers, tools, skills, agents, schedules, and connector status from daemon APIs.
+  - Closing the TUI does not stop daemon-owned jobs, schedules, or Discord connector state.
 - Phase 4 tests:
   - SQLite repositories for jobs, schedules, and connector events.
   - Scheduled tasks cannot use tools outside their declared allowlist.
@@ -200,7 +215,7 @@ References:
 - Manual acceptance by phase:
   - Phase 1: `uv run systerm doctor` passes and `uv run systerm chat "hello"` returns a model response.
   - Phase 2: A shell command requiring approval pauses until approved, then returns a tool result.
-  - Phase 3: `uv run systerm daemon` and `uv run systerm tui` run together and show live job/session updates.
+  - Phase 3: `uv run systerm daemon` and `uv run systerm` run together and show live job/session/approval/trace updates in the TUI.
   - Phase 4: A scheduled prompt runs through the daemon using its declared approved tools, and a Discord allowlisted user can submit a prompt.
 
 ## Assumptions
@@ -216,6 +231,10 @@ References:
 - `.env.template` is committed as the credential contract; `.env` is local-only and ignored by git.
 - V1 tool bundle is core only; MCP/email/Slack are planned extension targets, not first implementation.
 - The daemon is required for scheduled/background tasks; the TUI is an attachable operator client.
+- Running `systerm` with no subcommand launches the TUI by default once the TUI exists.
+- The daemon, not the TUI, owns Discord and future connector lifecycles.
+- The TUI can display and control connector state through daemon APIs, but connector connections continue when the TUI is closed.
+- TUI-managed pages should include sessions, jobs, approvals, traces, models, providers, tools, skills, agents, schedules, connectors, and event logs.
 - `AGENTS.md` is the canonical project-local agent profile and registry index.
 - `AGENTS.md` uses Markdown for human-readable instructions plus a required fenced TOML block for machine-readable references.
 - Skills and tools are implemented outside `AGENTS.md`; the file only references them and defines how the primary agent may use them.

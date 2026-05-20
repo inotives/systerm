@@ -64,3 +64,13 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ---
 
+## Systerm Agent Profile
+
+```toml
+skills = []
+tools = ["shell"]
+
+[agent]
+name = "systerm"
+model = "nvidia-minimax-2.7"
+```

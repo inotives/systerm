@@ -1,0 +1,171 @@
+[providers.nvidia]
+base_url = "https://integrate.api.nvidia.com/v1"
+api_key_env = "NVIDIA_API_KEY"
+api_style = "openai_chat"
+supports_streaming = true
+supports_tools = false
+models = [
+  "minimaxai/minimax-m2.7",
+  "google/gemma-4-31b-it",
+  "minimaxai/minimax-m2.5",
+  "moonshotai/kimi-k2.5",
+  "mistralai/mistral-large-3",
+  "deepseek-ai/deepseek-v3.2",
+  "deepseek-ai/deepseek-v3.1",
+  "nvidia/nemotron-3-super-120b-a12b",
+  "z-ai/glm5",
+  "qwen/qwen3.5-122b-a10b",
+  "qwen/qwen3-5-397b-a17b",
+]
+
+[providers.groq]
+base_url = "https://api.groq.com/openai/v1"
+api_key_env = "GROQ_API_KEY"
+api_style = "openai_chat"
+supports_streaming = true
+supports_tools = false
+models = [
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+  "meta-llama/llama-4-scout-17b-16e-instruct",
+  "qwen/qwen3-32b",
+  "moonshotai/kimi-k2-instruct-0905",
+  "openai/gpt-oss-120b",
+]
+
+[model_profiles."nvidia-minimax-2.7"]
+provider = "nvidia"
+model = "minimaxai/minimax-m2.7"
+timeout_seconds = 30
+retries = 0
+context_window = 192000
+max_tokens = 8192
+
+[model_profiles."nvidia-gemma-4-31b-it"]
+provider = "nvidia"
+model = "google/gemma-4-31b-it"
+timeout_seconds = 30
+retries = 0
+context_window = 192000
+max_tokens = 8192
+temperature = 0.6
+
+[model_profiles."nvidia-minimax-2.5"]
+provider = "nvidia"
+model = "minimaxai/minimax-m2.5"
+timeout_seconds = 30
+retries = 0
+context_window = 192000
+max_tokens = 8192
+
+[model_profiles."nvidia-kimi-k2.5"]
+provider = "nvidia"
+model = "moonshotai/kimi-k2.5"
+timeout_seconds = 30
+retries = 0
+context_window = 128000
+max_tokens = 8192
+
+[model_profiles."nvidia-mistral-large-3"]
+provider = "nvidia"
+model = "mistralai/mistral-large-3"
+timeout_seconds = 30
+retries = 0
+context_window = 131072
+max_tokens = 8192
+
+[model_profiles."nvidia-deepseek-v3.2"]
+provider = "nvidia"
+model = "deepseek-ai/deepseek-v3.2"
+timeout_seconds = 30
+retries = 0
+context_window = 128000
+max_tokens = 4096
+
+[model_profiles."nvidia-deepseek-v3.1"]
+provider = "nvidia"
+model = "deepseek-ai/deepseek-v3.1"
+timeout_seconds = 30
+retries = 0
+context_window = 128000
+max_tokens = 4096
+
+[model_profiles."nemotron-3-super"]
+provider = "nvidia"
+model = "nvidia/nemotron-3-super-120b-a12b"
+timeout_seconds = 30
+retries = 0
+context_window = 131072
+max_tokens = 8912
+
+[model_profiles."nvidia-glm5"]
+provider = "nvidia"
+model = "z-ai/glm5"
+timeout_seconds = 30
+retries = 0
+context_window = 131072
+max_tokens = 8192
+
+[model_profiles."nvidia-qwen-3.5-122b"]
+provider = "nvidia"
+model = "qwen/qwen3.5-122b-a10b"
+timeout_seconds = 30
+retries = 0
+context_window = 131072
+max_tokens = 4096
+
+[model_profiles."nvidia-qwen3.5-397b"]
+provider = "nvidia"
+model = "qwen/qwen3-5-397b-a17b"
+timeout_seconds = 30
+retries = 0
+context_window = 65536
+max_tokens = 4096
+
+[model_profiles."groq-llama-3.3-70b"]
+provider = "groq"
+model = "llama-3.3-70b-versatile"
+timeout_seconds = 30
+retries = 0
+context_window = 128000
+max_tokens = 8192
+
+[model_profiles."groq-llama-3.1-8b"]
+provider = "groq"
+model = "llama-3.1-8b-instant"
+timeout_seconds = 30
+retries = 0
+context_window = 128000
+max_tokens = 8192
+
+[model_profiles."groq-llama-4-scout"]
+provider = "groq"
+model = "meta-llama/llama-4-scout-17b-16e-instruct"
+timeout_seconds = 30
+retries = 0
+context_window = 131072
+max_tokens = 8192
+
+[model_profiles."groq-qwen3-32b"]
+provider = "groq"
+model = "qwen/qwen3-32b"
+timeout_seconds = 30
+retries = 0
+context_window = 131072
+max_tokens = 8192
+
+[model_profiles."groq-kimi-k2"]
+provider = "groq"
+model = "moonshotai/kimi-k2-instruct-0905"
+timeout_seconds = 30
+retries = 0
+context_window = 131072
+max_tokens = 16384
+
+[model_profiles."groq-gpt-oss-120b"]
+provider = "groq"
+model = "openai/gpt-oss-120b"
+timeout_seconds = 30
+retries = 0
+context_window = 131072
+max_tokens = 16384

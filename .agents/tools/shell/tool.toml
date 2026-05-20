@@ -1,0 +1,11 @@
+name = "shell"
+description = "Run a local shell command through Systerm's approval-aware tool runner."
+risk = "medium"
+
+[parameters]
+type = "object"
+required = ["command"]
+
+[parameters.properties.command]
+type = "string"
+description = "Command to execute in the local shell."
