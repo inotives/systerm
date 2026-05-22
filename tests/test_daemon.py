@@ -61,6 +61,23 @@ async def test_daemon_lists_sessions(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_daemon_creates_session(tmp_path: Path) -> None:
+    app = create_app(tmp_path, token="test-token")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        headers={"Authorization": "Bearer test-token"},
+    ) as client:
+        response = await client.post("/sessions")
+        sessions = await client.get("/sessions")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == sessions.json()[0]["id"]
+    assert sessions.json()[0]["message_count"] == 0
+
+
+@pytest.mark.asyncio
 async def test_daemon_approves_pending_approval(tmp_path: Path) -> None:
     store = SessionStore(default_db_path(tmp_path))
     await store.init()
@@ -246,6 +263,26 @@ async def test_daemon_create_job_returns_queued_and_records_events(tmp_path: Pat
     assert response.json()["status"] == "queued"
     assert events.status_code == 200
     assert events.json()[0]["type"] == "job.created"
+
+
+@pytest.mark.asyncio
+async def test_daemon_create_job_accepts_session_id(tmp_path: Path) -> None:
+    store = SessionStore(default_db_path(tmp_path))
+    await store.init()
+    session = await store.create_session()
+    app = create_app(tmp_path, token="test-token")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        headers={"Authorization": "Bearer test-token"},
+    ) as client:
+        response = await client.post("/jobs", json={"prompt": "hello", "session_id": session.id})
+        events = await client.get("/events")
+
+    assert response.status_code == 200
+    assert response.json()["session_id"] == session.id
+    assert events.json()[0]["session_id"] == session.id
 
 
 def test_daemon_websocket_streams_events(tmp_path: Path) -> None:

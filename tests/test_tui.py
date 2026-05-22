@@ -1,6 +1,9 @@
 import pytest
+from textual.containers import VerticalScroll
+from textual.widgets import Static
 
 from systerm.tui import (
+    SystermTui,
     clip,
     find_by_id,
     keep_or_first,
@@ -16,6 +19,7 @@ from systerm.tui import (
     render_status,
     render_transcript,
     render_trace,
+    render_user_transcript_block,
     render_welcome,
     select_relative,
     summarize_statuses,
@@ -121,6 +125,14 @@ def test_tui_render_transcript() -> None:
     assert "user:" in rendered
     assert "assistant [groq]:" in rendered
     assert "hi" in rendered
+    assert "[white on #171717] user:" in rendered
+
+
+def test_tui_render_user_transcript_block_escapes_markup() -> None:
+    rendered = "\n".join(render_user_transcript_block("user", "hello [red]world[/red]"))
+
+    assert "[white on #171717] user:" in rendered
+    assert r"\[red]world\[/red]" in rendered
 
 
 def test_tui_render_details() -> None:
@@ -217,3 +229,57 @@ async def test_wait_for_daemon_retries_until_health_ok() -> None:
     await wait_for_daemon(client, attempts=3, delay=0)
 
     assert client.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_tui_start_creates_fresh_active_session() -> None:
+    class FakeClient:
+        config = None
+        headers: dict[str, str] = {}
+
+        async def snapshot(self):
+            return {
+                "sessions": [{"id": 99, "message_count": 2}],
+                "jobs": [{"id": 1, "status": "complete", "session_id": 99}],
+                "approvals": [],
+                "events": [],
+                "models": {"default_model": "fast", "fallback_models": []},
+                "providers": {},
+                "agent": {"name": "systerm"},
+                "tools": {},
+            }
+
+        async def create_session(self):
+            return {"id": 100}
+
+    class TestTui(SystermTui):
+        async def connect_or_start_daemon(self):
+            return FakeClient()
+
+        async def watch_events(self) -> None:
+            return None
+
+    async with TestTui(auto_start_daemon=False).run_test() as pilot:
+        assert pilot.app.active_session_id == 100
+        assert pilot.app.selected_session_id == 100
+
+
+@pytest.mark.asyncio
+async def test_tui_uses_single_column_scrollable_transcript() -> None:
+    async with SystermTui(auto_start_daemon=False).run_test() as pilot:
+        assert list(pilot.app.query("#workspace")) == []
+        assert list(pilot.app.query("#sidebar")) == []
+        assert pilot.app.query_one("#welcome", Static)
+        assert pilot.app.query_one("#transcript-scroll", VerticalScroll)
+        assert pilot.app.query_one("#transcript", Static)
+
+
+@pytest.mark.asyncio
+async def test_tui_prompt_has_visible_content_region() -> None:
+    async with SystermTui(auto_start_daemon=False).run_test(size=(100, 30)) as pilot:
+        prompt = pilot.app.query_one("#prompt")
+        await pilot.click("#prompt")
+        await pilot.press("h", "i")
+
+        assert prompt.value == "hi"
+        assert prompt.content_region.height > 0

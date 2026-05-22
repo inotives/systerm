@@ -6,10 +6,11 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
+from rich.markup import escape
 import uvicorn
 import websockets
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import VerticalScroll
 from textual.widgets import Input, Static
 
 from systerm.daemon import create_app
@@ -24,31 +25,16 @@ class SystermTui(App[None]):
         color: #d8d1c7;
     }
 
-    #workspace {
-        height: 1fr;
-        border: solid #8b748d;
-        background: #20242b;
-    }
-
-    #sidebar {
-        width: 45;
-        min-width: 34;
-        border-right: solid #4d455f;
-        background: #211d2e;
-    }
-
     #welcome {
         height: auto;
         padding: 1 1 0 1;
         color: #c8bdd5;
-        background: #211d2e;
+        background: #20242b;
     }
 
-    #status {
-        height: auto;
-        padding: 1;
-        color: #9b92aa;
-        background: #211d2e;
+    #transcript-scroll {
+        height: 1fr;
+        background: #20242b;
     }
 
     #transcript {
@@ -57,10 +43,17 @@ class SystermTui(App[None]):
         background: #20242b;
     }
 
+    #status {
+        height: 1;
+        padding: 0 1;
+        color: #9b92aa;
+        background: #20242b;
+    }
+
     #prompt {
-        height: 5;
-        border: solid #8b748d;
-        padding: 1;
+        height: 3;
+        border-top: solid #8b748d;
+        padding: 0 1;
         background: #2d2739;
         color: #f1ece4;
     }
@@ -79,6 +72,8 @@ class SystermTui(App[None]):
         ("y", "retry_selected_job", "Retry job"),
         ("a", "approve_selected", "Approve"),
         ("x", "reject_selected", "Reject"),
+        ("pageup", "scroll_transcript_up", "Scroll up"),
+        ("pagedown", "scroll_transcript_down", "Scroll down"),
     ]
 
     def __init__(self, auto_start_daemon: bool = True) -> None:
@@ -97,11 +92,10 @@ class SystermTui(App[None]):
         self.selected_approval_id: int | None = None
 
     def compose(self) -> ComposeResult:
-        with Horizontal(id="workspace"):
-            with Vertical(id="sidebar"):
-                yield Static(render_welcome(None, "connecting to daemon...", []), id="welcome")
-                yield Static("daemon: connecting", id="status")
-            yield Static("Transcript\n  waiting for a completed job", id="transcript")
+        yield Static(render_welcome(None, "connecting to daemon...", []), id="welcome")
+        with VerticalScroll(id="transcript-scroll"):
+            yield Static("Transcript\n  waiting for a session", id="transcript")
+        yield Static("daemon: connecting", id="status")
         yield Input(placeholder="Submit prompt to daemon job queue", id="prompt")
 
     async def on_mount(self) -> None:
@@ -114,6 +108,7 @@ class SystermTui(App[None]):
             return
 
         await self.refresh_snapshot()
+        await self.ensure_active_session()
         self.events_task = asyncio.create_task(self.watch_events())
 
     async def action_refresh(self) -> None:
@@ -195,6 +190,12 @@ class SystermTui(App[None]):
         self.query_one("#status", Static).update(f"rejected #{approval['id']}")
         await self.refresh_snapshot()
 
+    async def action_scroll_transcript_up(self) -> None:
+        self.query_one("#transcript-scroll", VerticalScroll).scroll_page_up()
+
+    async def action_scroll_transcript_down(self) -> None:
+        self.query_one("#transcript-scroll", VerticalScroll).scroll_page_down()
+
     async def on_unmount(self) -> None:
         if self.events_task is not None:
             self.events_task.cancel()
@@ -237,8 +238,13 @@ class SystermTui(App[None]):
         if not prompt or self.client is None:
             return
         event.input.value = ""
+        if await self.handle_command(prompt):
+            return
+        session_id = await self.ensure_active_session()
+        if session_id is None:
+            return
         try:
-            job = await self.client.create_job(prompt)
+            job = await self.client.create_job_for_session(prompt, session_id)
         except Exception as exc:
             self.query_one("#status", Static).update(f"job submit failed: {exc}")
             return
@@ -257,10 +263,36 @@ class SystermTui(App[None]):
         self.snapshot = snapshot
         self.ensure_selection()
         self.render_snapshot()
-        if self.active_session_id is None:
-            latest_session_id = latest_completed_session_id(snapshot["jobs"])
-            if latest_session_id is not None:
-                await self.load_session(latest_session_id)
+
+    async def handle_command(self, command: str) -> bool:
+        if command.strip() != "/session new":
+            return False
+        self.active_session_id = None
+        session_id = await self.ensure_active_session()
+        if session_id is not None:
+            self.query_one("#status", Static).update(f"started session #{session_id}")
+            self.update_transcript(render_transcript({"id": session_id, "messages": []}))
+            await self.refresh_snapshot()
+        return True
+
+    async def ensure_active_session(self) -> int | None:
+        if self.active_session_id is not None:
+            return self.active_session_id
+        if self.client is None:
+            return None
+        try:
+            session = await self.client.create_session()
+        except Exception as exc:
+            self.query_one("#status", Static).update(f"session create failed: {exc}")
+            return None
+        session_id = session.get("id")
+        if not isinstance(session_id, int):
+            self.query_one("#status", Static).update("session create failed: daemon returned no session id")
+            return None
+        self.active_session_id = session_id
+        self.selected_session_id = session_id
+        self.update_transcript(render_transcript({"id": session_id, "messages": []}))
+        return session_id
 
     def render_snapshot(self) -> None:
         if self.snapshot is None:
@@ -308,7 +340,7 @@ class SystermTui(App[None]):
             self.query_one("#status", Static).update(f"session load failed: {exc}")
             return
         self.active_session_id = session_id
-        self.query_one("#transcript", Static).update(render_transcript(session))
+        self.update_transcript(render_transcript(session))
 
     async def load_trace(self, session_id: int) -> None:
         if self.client is None:
@@ -319,7 +351,11 @@ class SystermTui(App[None]):
             self.query_one("#status", Static).update(f"trace load failed: {exc}")
             return
         self.active_session_id = session_id
-        self.query_one("#transcript", Static).update(render_trace(trace))
+        self.update_transcript(render_trace(trace))
+
+    def update_transcript(self, content: str) -> None:
+        self.query_one("#transcript", Static).update(content)
+        self.call_after_refresh(self.query_one("#transcript-scroll", VerticalScroll).scroll_end, animate=False)
 
     async def watch_events(self) -> None:
         if self.client is None:
@@ -333,10 +369,14 @@ class SystermTui(App[None]):
                     async for message in websocket:
                         event = json.loads(message)
                         self.last_events = (self.last_events + [event])[-12:]
-                        if event.get("type") == "job.completed":
-                            session_id = event.get("session_id")
-                            if isinstance(session_id, int):
-                                await self.load_session(session_id)
+                        session_id = event.get("session_id")
+                        if isinstance(session_id, int) and session_id == self.active_session_id and event.get("type") in {
+                            "message.created",
+                            "job.completed",
+                            "approval.required",
+                            "tool_result.created",
+                        }:
+                            await self.load_session(session_id)
                         if event.get("type", "").startswith(("job.", "approval.", "session.", "message.", "tool_")):
                             await self.refresh_snapshot()
             except asyncio.CancelledError:
@@ -538,9 +578,19 @@ def render_transcript(session: dict[str, Any]) -> str:
         if model:
             label += f" [{model}]"
         content = str(message.get("content", "")).strip()
-        lines.append(f"\n{label}:")
-        lines.append(content or "  ")
+        if role == "user":
+            lines.append("")
+            lines.extend(render_user_transcript_block(label, content))
+        else:
+            lines.append(f"\n{label}:")
+            lines.append(escape(content) or "  ")
     return "\n".join(lines)
+
+
+def render_user_transcript_block(label: str, content: str) -> list[str]:
+    user_style = "white on #171717"
+    block_lines = [f"{label}:", *(content or "  ").splitlines()]
+    return [f"[{user_style}] {escape(line)} [/]" for line in block_lines]
 
 
 def render_trace(trace: dict[str, Any]) -> str:

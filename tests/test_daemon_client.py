@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import httpx
@@ -61,6 +62,8 @@ async def test_daemon_client_fetches_sessions_trace_and_approvals() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         if request.url.path == "/sessions":
+            if request.method == "POST":
+                return httpx.Response(200, json={"id": 4})
             return httpx.Response(200, json=[])
         if request.url.path == "/sessions/3/trace":
             return httpx.Response(200, json={"id": 3, "messages": [], "tool_calls": [], "approvals": []})
@@ -74,13 +77,34 @@ async def test_daemon_client_fetches_sessions_trace_and_approvals() -> None:
     )
 
     assert await client.sessions() == []
+    assert await client.create_session() == {"id": 4}
     assert await client.session_trace(3) == {"id": 3, "messages": [], "tool_calls": [], "approvals": []}
     assert await client.approvals(status="all") == []
     assert [str(request.url) for request in requests] == [
         "http://daemon.test/sessions",
+        "http://daemon.test/sessions",
         "http://daemon.test/sessions/3/trace",
         "http://daemon.test/approvals?status=all",
     ]
+
+
+@pytest.mark.asyncio
+async def test_daemon_client_creates_job_for_session() -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"id": 9, "status": "queued", "session_id": 7})
+
+    client = DaemonClient(
+        DaemonClientConfig(base_url="http://daemon.test", token="token"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    job = await client.create_job_for_session("hello", 7)
+
+    assert job["session_id"] == 7
+    assert json.loads(requests[0].content) == {"prompt": "hello", "session_id": 7}
 
 
 @pytest.mark.asyncio

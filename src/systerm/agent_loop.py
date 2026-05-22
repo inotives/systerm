@@ -33,13 +33,26 @@ class AgentLoop:
         self.tools = tools
         self.publish_event = publish_event
 
-    async def run(self, prompt: str, requested_model: str) -> AgentRunResult:
-        session = await self.store.create_session(metadata_json=json.dumps({"requested_model": requested_model}))
-        await self._publish("session.created", {"session_id": session.id}, session.id)
-        await self.store.add_message(session.id, "user", prompt)
-        await self._publish("message.created", {"role": "user"}, session.id)
+    async def run(
+        self,
+        prompt: str,
+        requested_model: str,
+        session_id: int | None = None,
+    ) -> AgentRunResult:
+        if session_id is None:
+            session = await self.store.create_session(metadata_json=json.dumps({"requested_model": requested_model}))
+            session_id = session.id
+            await self._publish("session.created", {"session_id": session_id}, session_id)
 
-        messages: list[dict[str, object]] = [{"role": "user", "content": prompt}]
+        await self.store.add_message(session_id, "user", prompt)
+        await self._publish("message.created", {"role": "user"}, session_id)
+
+        records = await self.store.list_messages(session_id)
+        messages: list[dict[str, object]] = [
+            {"role": message["role"], "content": message["content"]}
+            for message in records
+            if message["role"] in {"system", "user", "assistant"}
+        ]
         result = await self.client.chat(
             messages,
             requested_model=requested_model,
@@ -47,17 +60,17 @@ class AgentLoop:
         )
         if result.content:
             await self.store.add_message(
-                session.id,
+                session_id,
                 "assistant",
                 result.content,
                 result.model_profile,
                 metadata_json=json.dumps({"attempted_profiles": list(result.attempted_profiles)}),
             )
-            await self._publish("message.created", {"role": "assistant", "model_profile": result.model_profile}, session.id)
+            await self._publish("message.created", {"role": "assistant", "model_profile": result.model_profile}, session_id)
 
         if not result.tool_calls:
             return AgentRunResult(
-                session_id=session.id,
+                session_id=session_id,
                 content=result.content,
                 model_profile=result.model_profile,
                 stop_reason="complete",
@@ -66,18 +79,18 @@ class AgentLoop:
         tool_outputs: list[str] = []
         runner = ToolRunner(self.store)
         for tool_call in result.tool_calls:
-            output = await self._run_tool_call(runner, session.id, tool_call)
+            output = await self._run_tool_call(runner, session_id, tool_call)
             tool_outputs.append(output.content)
             if output.status == "approval-required":
-                await self.store.add_message(session.id, "assistant", output.content, result.model_profile)
+                await self.store.add_message(session_id, "assistant", output.content, result.model_profile)
                 await self._publish(
                     "approval.required",
                     {"approval_id": output.approval_id, "tool_call_id": output.tool_call_id},
-                    session.id,
+                    session_id,
                 )
-                await self._publish("message.created", {"role": "assistant", "model_profile": result.model_profile}, session.id)
+                await self._publish("message.created", {"role": "assistant", "model_profile": result.model_profile}, session_id)
                 return AgentRunResult(
-                    session_id=session.id,
+                    session_id=session_id,
                     content=output.content,
                     model_profile=result.model_profile,
                     stop_reason="approval-required",
@@ -85,15 +98,15 @@ class AgentLoop:
 
         content = "\n".join(tool_outputs)
         await self.store.add_message(
-            session.id,
+            session_id,
             "tool",
             content,
             result.model_profile,
             metadata_json=json.dumps({"tool_call_count": len(result.tool_calls)}),
         )
-        await self._publish("message.created", {"role": "tool", "model_profile": result.model_profile}, session.id)
+        await self._publish("message.created", {"role": "tool", "model_profile": result.model_profile}, session_id)
         return AgentRunResult(
-            session_id=session.id,
+            session_id=session_id,
             content=content,
             model_profile=result.model_profile,
             stop_reason="tool-use",

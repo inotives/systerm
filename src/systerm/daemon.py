@@ -23,6 +23,7 @@ TOKEN_ENV = "SYSTERM_DAEMON_TOKEN"
 
 class JobRequest(BaseModel):
     prompt: str
+    session_id: int | None = None
 
 
 class ApprovalResolution(BaseModel):
@@ -55,6 +56,19 @@ def create_app(project_root: Path, token: str | None = None) -> FastAPI:
     @app.get("/sessions", dependencies=[auth])
     async def sessions() -> list[dict[str, object]]:
         return await store.list_sessions()
+
+    @app.post("/sessions", dependencies=[auth])
+    async def create_session() -> dict[str, object]:
+        await store.init()
+        session = await store.create_session(metadata_json=json.dumps({"source": "tui"}))
+        await publish_event(
+            store,
+            subscribers,
+            "session.created",
+            {"session_id": session.id},
+            session_id=session.id,
+        )
+        return session.__dict__
 
     @app.get("/jobs", dependencies=[auth])
     async def jobs() -> list[dict[str, object]]:
@@ -178,15 +192,18 @@ def create_app(project_root: Path, token: str | None = None) -> FastAPI:
     @app.post("/jobs", dependencies=[auth])
     async def create_job(request: JobRequest) -> dict[str, object]:
         await store.init()
-        job = await store.create_job(request.prompt)
+        job = await store.create_job(request.prompt, session_id=request.session_id)
         await publish_event(
             store,
             subscribers,
             "job.created",
-            {"job_id": job.id, "status": job.status},
+            {"job_id": job.id, "status": job.status, "session_id": job.session_id},
             job_id=job.id,
+            session_id=job.session_id,
         )
-        job_tasks[job.id] = asyncio.create_task(run_job(project_root, store, subscribers, job.id, request.prompt))
+        job_tasks[job.id] = asyncio.create_task(
+            run_job(project_root, store, subscribers, job.id, request.prompt, session_id=request.session_id)
+        )
         return job.__dict__
 
     @app.post("/jobs/{job_id}/cancel", dependencies=[auth])
@@ -215,6 +232,7 @@ def create_app(project_root: Path, token: str | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="job not found")
         job = await store.create_job(
             original.prompt,
+            session_id=original.session_id,
             metadata_json=json.dumps({"retry_of": job_id}),
         )
         await publish_event(
@@ -224,7 +242,9 @@ def create_app(project_root: Path, token: str | None = None) -> FastAPI:
             {"job_id": job.id, "status": job.status, "retry_of": job_id},
             job_id=job.id,
         )
-        job_tasks[job.id] = asyncio.create_task(run_job(project_root, store, subscribers, job.id, job.prompt))
+        job_tasks[job.id] = asyncio.create_task(
+            run_job(project_root, store, subscribers, job.id, job.prompt, session_id=original.session_id)
+        )
         return job.__dict__
 
     @app.websocket("/events")
@@ -254,12 +274,15 @@ async def run_job(
     subscribers: set[asyncio.Queue[dict[str, object]]],
     job_id: int,
     prompt: str,
+    session_id: int | None = None,
 ) -> None:
     job = await store.get_job(job_id)
     if job is None or job.status == "canceled":
         return
+    if session_id is None:
+        session_id = job.session_id
     running = await store.mark_job_running(job_id)
-    await publish_event(store, subscribers, "job.started", running.__dict__, job_id=job_id)
+    await publish_event(store, subscribers, "job.started", running.__dict__, job_id=job_id, session_id=session_id)
     try:
         config = load_config(project_root)
         profile = load_agent_profile(project_root / "AGENTS.md")
@@ -282,6 +305,7 @@ async def run_job(
         result = await AgentLoop(OpenAICompatibleClient(config), store, tools, publish_runtime_event).run(
             prompt,
             requested_model=profile.model,
+            session_id=session_id,
         )
     except asyncio.CancelledError:
         job = await store.get_job(job_id)
@@ -300,13 +324,14 @@ async def run_job(
         job = await store.get_job(job_id)
         if job is not None and job.status == "canceled":
             return
-        completed = await store.complete_job(job_id, "failed", None, error=str(exc))
+        completed = await store.complete_job(job_id, "failed", session_id, error=str(exc))
         await publish_event(
             store,
             subscribers,
             "job.failed",
             completed.__dict__,
             job_id=job_id,
+            session_id=session_id,
         )
         return
 

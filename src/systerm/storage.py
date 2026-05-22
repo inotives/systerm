@@ -216,15 +216,20 @@ class SessionStore:
             rows = await cursor.fetchall()
         return [{"id": row[0], "created_at": row[1], "metadata_json": row[2], "message_count": row[3]} for row in rows]
 
-    async def create_job(self, prompt: str, metadata_json: str = "{}") -> JobRecord:
+    async def create_job(
+        self,
+        prompt: str,
+        session_id: int | None = None,
+        metadata_json: str = "{}",
+    ) -> JobRecord:
         created_at = _now()
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 """
-                insert into jobs (prompt, status, created_at, metadata_json)
-                values (?, ?, ?, ?)
+                insert into jobs (prompt, status, session_id, created_at, metadata_json)
+                values (?, ?, ?, ?, ?)
                 """,
-                (prompt, "queued", created_at, metadata_json),
+                (prompt, "queued", session_id, created_at, metadata_json),
             )
             await db.commit()
             job_id = _require_row_id(cursor.lastrowid)
@@ -232,7 +237,7 @@ class SessionStore:
             id=job_id,
             prompt=prompt,
             status="queued",
-            session_id=None,
+            session_id=session_id,
             result_content=None,
             error=None,
             created_at=created_at,

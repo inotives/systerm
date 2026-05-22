@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import httpx
@@ -119,3 +120,54 @@ async def test_agent_loop_pauses_on_approval_required_tool_call(tmp_path: Path) 
     assert approvals[0].status == "pending"
     sessions = await store.list_sessions()
     assert await store.list_session_approvals(sessions[0]["id"]) == approvals
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_appends_to_existing_session(tmp_path: Path) -> None:
+    config = AppConfig.model_validate(
+        {
+            "models": {"default_model": "fast", "fallback_models": []},
+            "providers": {"test": {"base_url": "https://example.test/v1", "supports_tools": False}},
+            "model_profiles": {"fast": {"provider": "test", "model": "fast-model"}},
+        }
+    )
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "second reply"}}]},
+            request=request,
+        )
+
+    store = SessionStore(tmp_path / "systerm.db")
+    await store.init()
+    session = await store.create_session()
+    await store.add_message(session.id, "user", "first")
+    await store.add_message(session.id, "assistant", "first reply")
+    transport = httpx.MockTransport(handler)
+
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        client = OpenAICompatibleClient(config, http_client=http_client)
+        result = await AgentLoop(client, store, {}).run(
+            "second",
+            requested_model="fast",
+            session_id=session.id,
+        )
+
+    sessions = await store.list_sessions()
+    messages = await store.list_messages(session.id)
+    assert result.session_id == session.id
+    assert len(sessions) == 1
+    assert messages == [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "first reply"},
+        {"role": "user", "content": "second"},
+        {"role": "assistant", "content": "second reply"},
+    ]
+    assert requests[0]["messages"] == [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "first reply"},
+        {"role": "user", "content": "second"},
+    ]

@@ -79,11 +79,17 @@ class DaemonClient:
         return await self._get(f"/jobs/{job_id}")
 
     async def create_job(self, prompt: str) -> dict[str, Any]:
+        return await self.create_job_for_session(prompt)
+
+    async def create_job_for_session(self, prompt: str, session_id: int | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {"prompt": prompt}
+        if session_id is not None:
+            payload["session_id"] = session_id
         async with httpx.AsyncClient(timeout=30, transport=self.transport) as client:
             response = await client.post(
                 self.config.base_url + "/jobs",
                 headers=self.headers,
-                json={"prompt": prompt},
+                json=payload,
             )
             response.raise_for_status()
             return response.json()
@@ -96,6 +102,9 @@ class DaemonClient:
 
     async def sessions(self) -> list[dict[str, Any]]:
         return await self._get("/sessions")
+
+    async def create_session(self) -> dict[str, Any]:
+        return await self._post("/sessions")
 
     async def session(self, session_id: int) -> dict[str, Any]:
         return await self._get(f"/sessions/{session_id}")
